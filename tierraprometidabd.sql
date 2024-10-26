@@ -230,50 +230,6 @@ CREATE TABLE INCLUYEN (
 );
 
 --****************TRIGGERS******************
---Jerarquia exclusiva contratos
-CREATE OR REPLACE FUNCTION validar_insertar_alquiler()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Verificar si el contrato es de tipo 'Alquiler'
-    IF NOT EXISTS (
-        SELECT 1 
-        FROM CONTRATOS 
-        WHERE NumeroContrato = NEW.CodigoContrato 
-        AND TipoContrato = 'Alquiler'
-    ) THEN
-        RAISE EXCEPTION 'El contrato no es de tipo Alquiler. No se puede insertar en la tabla ALQUILERES.';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trigger_validar_insertar_alquiler
-BEFORE INSERT ON ALQUILERES
-FOR EACH ROW
-EXECUTE FUNCTION validar_insertar_alquiler();
-
---jerarquia exclusiva contratos
-CREATE OR REPLACE FUNCTION validar_insertar_venta()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Verificar si el contrato es de tipo 'Venta'
-    IF NOT EXISTS (
-        SELECT 1 
-        FROM CONTRATOS 
-        WHERE NumeroContrato = NEW.CodigoContrato 
-        AND TipoContrato = 'Venta'
-    ) THEN
-        RAISE EXCEPTION 'El contrato no es de tipo Venta. No se puede insertar en la tabla VENTAS.';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trigger_validar_insertar_venta
-BEFORE INSERT ON VENTAS
-FOR EACH ROW
-EXECUTE FUNCTION validar_insertar_venta();
-
 --cada oficina solo tiene un director.
 CREATE OR REPLACE FUNCTION validar_director_unico()
 RETURNS TRIGGER AS $$
@@ -337,7 +293,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Creamos el trigger que se ejecuta después de borrar un inmueble
+-- Creamos el trigger que se ejecuta después de borrar un inmueble 
 CREATE TRIGGER trigger_auditar_inmueble
 AFTER DELETE ON INMUEBLES
 FOR EACH ROW
@@ -347,29 +303,18 @@ EXECUTE FUNCTION auditar_inmueble_eliminado();
 CREATE OR REPLACE FUNCTION validar_fecha_contrato_alquiler()
 RETURNS TRIGGER AS $$
 DECLARE
-    tipo_contrato VARCHAR(20);
     fecha_inicio DATE;
     fecha_finalizacion DATE;
 BEGIN
-    -- Obtener el tipo de contrato
-    SELECT TipoContrato INTO tipo_contrato
-    FROM CONTRATOS
-    WHERE NumeroContrato = NEW.NumeroContrato;
-
-    -- Si es venta, no hacemos nada
-    IF tipo_contrato = 'Venta' THEN
-        RETURN NEW;
-    END IF;
-
     -- Si es alquiler, obtenemos la fecha de inicio
     SELECT FechaInicio INTO fecha_inicio
-    FROM ALQUILERES
+    FROM CONTRATOS
     WHERE CodigoContrato = NEW.NumeroContrato;
 
     -- Buscar en CONTIENEN el último contrato para el inmueble
     SELECT a.FechaFinalizacion INTO fecha_finalizacion
     FROM CONTIENEN c
-    JOIN ALQUILERES a ON c.NumeroContrato = a.CodigoContrato
+    JOIN CONTRATOS a ON c.NumeroContrato = a.CodigoContrato
     WHERE c.CodigoInmueble = NEW.CodigoInmueble
     ORDER BY c.NumeroContrato DESC
     LIMIT 1;
@@ -400,11 +345,11 @@ DECLARE
     nuevo_tipo_empresa VARCHAR(50) := NULL; -- Asegúrate de que sea NULL
     nuevo_nombre_persona_contacto VARCHAR(50);
 BEGIN
-    -- Obtener el Código del Cliente del contrato
+    -- Obtener el Código del Cliente de la factura asociada
     SELECT CodigoCliente
     INTO codigo_cliente
-    FROM CONTRATOS
-    WHERE NumeroContrato = NEW.NumeroContrato; -- Cambia a NEW.NumeroContrato
+    FROM FACTURAS
+    WHERE NumeroFactura = NEW.NumeroFactura;
 
     -- Obtener los atributos del nuevo propietario desde la tabla CLIENTES
     SELECT Nombre, Direccion, NumTelefono
@@ -412,7 +357,7 @@ BEGIN
     FROM CLIENTES
     WHERE CodigoCliente = codigo_cliente;
 
-    -- Iterar sobre cada inmueble asociado al contrato y actualizar el propietario
+    -- Actualizar el propietario del inmueble que está incluido en la factura
     UPDATE PROPIETARIOS
     SET 
         Nombre = nuevo_nombre,
@@ -424,11 +369,7 @@ BEGIN
     WHERE CodigoPropietario IN (
         SELECT CodigoPropietario 
         FROM INMUEBLES 
-        WHERE CodigoInmueble IN (
-            SELECT CodigoInmueble 
-            FROM CONTIENEN 
-            WHERE NumeroContrato = NEW.NumeroContrato -- Cambia a NEW.NumeroContrato
-        )
+        WHERE CodigoInmueble = NEW.CodigoInmueble -- Se usa el inmueble que está en la tabla INCLUYEN
     );
 
     RETURN NEW;
@@ -436,10 +377,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trigger_actualizar_propietario
-AFTER INSERT ON CONTIENEN -- Cambia el evento a CONTIENEN
+AFTER INSERT ON INCLUYEN -- Se ejecuta después de insertar en INCLUYEN
 FOR EACH ROW
 EXECUTE FUNCTION actualizar_propietario_despues_de_venta();
-
 
 -- Cada miembro de la plantilla puede tener asignados hasta veinte inmuebles para alquilar.
 CREATE OR REPLACE FUNCTION validar_inmuebles_empleado()
@@ -563,3 +503,228 @@ CREATE TRIGGER trigger_validar_insertar_supervisor
 BEFORE INSERT ON SUPERVISORES
 FOR EACH ROW
 EXECUTE FUNCTION validar_insertar_supervisor();
+
+--*****************Lenguaje de Manipulacion de datos************************
+
+-- 1Crear y mantener las fichas con los datos de los empleados y su familiar más próximo (director).
+-- Insertar tres oficinas en Venezuela
+INSERT INTO OFICINAS (DireccionCalle, DireccionNumero, DireccionCiudad, NumTelefono, NumFax)
+VALUES 
+('Av. Francisco de Miranda', '125', 'Caracas', '0212-5554321', '0212-5554322'),
+('Calle 72', '10B', 'Maracaibo', '0261-7891234', '0261-7891235'),
+('Av. Los Leones', '47', 'Barquisimeto', '0251-4567890', '0251-4567891');
+
+-- Insertar un empleado en la oficina de Caracas (la primera oficina insertada)
+INSERT INTO EMPLEADOS (DNI, Nombre, Direccion, NumTelefono, FechaNacimiento, ParienteNombre, ParienteRelacion, ParienteDireccion, ParienteNumTelefono, SalarioAnual, FechaIngreso, Cargo, CodigoOficina)
+VALUES 
+('V-12345678', 'Luis Fernández', 'Calle La Candelaria, Edif. 32', '0414-1234567', '1985-03-22', 'Ana Fernández', 'Esposa', 'Calle Los Jardines, Casa 5', '0424-8765432', 60000.00, '2015-09-10', 'Director', 1);
+SELECT *
+FROM DIRECTORES
+-- Insertar al director en la tabla DIRECTORES
+INSERT INTO DIRECTORES (CodigoEmpleado, FechaInicio, MontoPagoAnual, BonificacionAnual)
+VALUES 
+(7 '2015-09-10', 60000.00, 5000.00);
+
+-- Insertar 4 supervisores
+INSERT INTO EMPLEADOS (DNI, Nombre, Direccion, NumTelefono, FechaNacimiento, ParienteNombre, ParienteRelacion, ParienteDireccion, ParienteNumTelefono, SalarioAnual, FechaIngreso, Cargo, CodigoOficina)
+VALUES 
+('V-23456789', 'María Pérez', 'Calle 13, Edif. 45', '0416-7654321', '1990-05-10', 'Juan Pérez', 'Hermano', 'Calle 12, Casa 20', '0424-5678901', 50000.00, '2020-01-15', 'Supervisor', 1),
+('V-34567890', 'José López', 'Calle El Mirador, Casa 78', '0416-1234567', '1988-11-22', 'Laura López', 'Esposa', 'Calle Los Olivos, Casa 10', '0416-7654322', 50000.00, '2020-02-20', 'Supervisor', 1),
+('V-45678901', 'Ana González', 'Av. Bolívar, Edif. 32', '0414-2345678', '1995-07-15', 'Carlos González', 'Padre', 'Calle Las Flores, Casa 15', '0414-8765432', 48000.00, '2021-03-05', 'Supervisor', 2),
+('V-56789012', 'Luis Ramírez', 'Calle 5, Casa 14', '0412-1234567', '1992-12-01', 'Clara Ramírez', 'Esposa', 'Calle 7, Casa 10', '0412-7654321', 48000.00, '2021-03-15', 'Supervisor', 3);
+
+-- Insertar supervisores en la tabla SUPERVISORES
+INSERT INTO SUPERVISORES (CodigoEmpleado)
+VALUES 
+(19),  -- María Pérez (Oficina Caracas)
+(20),  -- José López (Oficina Caracas)
+(21),  -- Ana González (Oficina Maracaibo)
+(22);  -- Luis Ramírez (Oficina Barquisimeto)
+
+-- Insertar 1 administrador para la oficina de Caracas
+INSERT INTO EMPLEADOS (DNI, Nombre, Direccion, NumTelefono, FechaNacimiento, ParienteNombre, ParienteRelacion, ParienteDireccion, ParienteNumTelefono, SalarioAnual, FechaIngreso, Cargo, CodigoOficina)
+VALUES 
+('V-67890123', 'Carmen Torres', 'Calle El Palmar, Edif. 2', '0414-2345679', '1990-08-20', 'Pedro Torres', 'Hijo', 'Calle 9, Casa 8', '0414-8765433', 55000.00, '2018-07-10', 'Administrador', 1);
+
+-- Insertar administrador en la tabla ADMINISTRADORES
+INSERT INTO ADMINISTRADORES (CodigoEmpleado, VelocidadEscritura, CodigoSupervisor)
+VALUES 
+(23, 85, 19);  -- Carmen Torres (supervisada por María Pérez)
+
+-- Insertar 4 empleados (cargo 'Otro') para la oficina de Caracas
+INSERT INTO EMPLEADOS (DNI, Nombre, Direccion, NumTelefono, FechaNacimiento, ParienteNombre, ParienteRelacion, ParienteDireccion, ParienteNumTelefono, SalarioAnual, FechaIngreso, Cargo, CodigoOficina, CodigoSupervisor)
+VALUES 
+('V-78901234', 'Rafael Díaz', 'Calle 10, Casa 30', '0414-9876543', '1993-04-25', 'Sofía Díaz', 'Hija', 'Calle 12, Casa 14', '0414-2345670', 30000.00, '2022-09-01', 'Otro', 1,19),
+('V-89012345', 'Natalia Castro', 'Calle 11, Edif. 8', '0416-9876542', '1991-01-11', 'Alfredo Castro', 'Esposo', 'Calle 14, Casa 22', '0416-8765435', 30000.00, '2022-09-05', 'Otro', 1,19),
+('V-90123456', 'Miguel Fernández', 'Calle 12, Casa 5', '0412-3456789', '1995-03-19', 'Rosa Fernández', 'Madre', 'Calle 5, Casa 10', '0412-2345678', 30000.00, '2022-09-10', 'Otro', 1,19),
+('V-01234567', 'Patricia Martínez', 'Calle 13, Edif. 25', '0414-1234568', '1994-06-15', 'Javier Martínez', 'Esposo', 'Calle 10, Casa 9', '0414-5678902', 30000.00, '2022-09-15', 'Otro', 1,19);
+--2. Realizar listados de los empleados de cada oficina (director).
+SELECT * 
+FROM EMPLEADOS
+
+
+--3. Realizar listados del grupo de empleados de un supervisor (director y supervisor).
+SELECT * 
+FROM EMPLEADOS
+WHERE codigosupervisor = 19
+
+
+--4. Realizar listados de los supervisores de cada oficina (director y supervisor).
+SELECT *
+FROM EMPLEADOS
+WHERE Cargo = 'Supervisor'
+
+
+--5. Crear y mantener las fichas con los datos de los inmuebles para alquilar (y de sus propietarios) de cada oficina (supervisor).
+
+-- Insertar 5 propietarios
+INSERT INTO PROPIETARIOS (Nombre, Direccion, NumTelefono, TipoPropietario, TipoEmpresa, NombrePersonaContacto)
+VALUES 
+('Carlos Rivas', 'Calle Libertador, Edif. 10', '0212123456', 'Particular', NULL, NULL),
+('Inversiones Roca C.A.', 'Av. Francisco Solano, Torre B', '0212765432', 'Empresa', 'Inmobiliaria', 'Lucía Gómez'),
+('Ana López', 'Calle 9, Casa 15', '0414123456', 'Particular', NULL, NULL),
+('Comercial Las Brisas C.A.', 'Av. Andrés Bello, Local 8', '0261123456', 'Empresa', 'Comercializadora', 'Jorge Pérez'),
+('Corporación Mérida C.A.', 'Av. Universidad, Torre C', '0274123456', 'Empresa', 'Constructora', 'Marta Sánchez');
+
+-- Insertar 5 inmuebles
+INSERT INTO INMUEBLES (DireccionCalle, DireccionNumero, DireccionCiudad, TipoInmueble, NumHabitaciones, Descripcion, PrecioAlquilerEuros, PrecioVenta, CodigoPropietario, CodigoEmpleado)
+VALUES 
+('Av. Urdaneta', '56', 'Caracas', 'Apartamento', 3, 'Apartamento amplio en zona céntrica', 500.00, 60000.00, 1, 19),
+('Calle 5', '22', 'Maracaibo', 'Casa', 4, 'Casa con amplio jardín y garaje', 800.00, 120000.00, 2, 20),
+('Av. Libertador', '1001', 'Barquisimeto', 'Local Comercial', 1, 'Local con excelente ubicación comercial', 300.00, 50000.00, 3, 22),
+('Calle Los Jardines', '35', 'Maracaibo', 'Apartamento', 2, 'Apartamento cómodo, ideal para parejas', 400.00, 70000.00, 4, 21),
+('Av. Bolívar', '78', 'Caracas', 'Oficina', 1, 'Oficina moderna en edificio corporativo', 350.00, 90000.00, 5, 19);
+--6. Realizar listados de los inmuebles para alquilar en cada oficina (toda la plantilla).
+SELECT * 
+FROM INMUEBLES
+WHERE PrecioAlquilerEuros IS NOT NULL
+
+
+--7. Realizar listados de los inmuebles para alquilar asignados a un determinado miembro de la plantilla (supervisor).
+SELECT *
+FROM INMUEBLES 
+WHERE CodigoEmpleado = 19
+
+
+--8. Crear y mantener las fichas con los datos de los posibles inquilinos de cada oficina (supervisor).
+-- Insertar 5 clientes en la tabla CLIENTES
+INSERT INTO CLIENTES (Nombre, Direccion, NumTelefono, TipoInmueble, ImporteMax, CodigoEmpleado, FechaEntrevistaInicial, ComentariosEntrevista)
+VALUES
+('Carlos Hernández', 'Av. Sucre, Edif. Bolívar, Caracas', '0414-7654321', 'Apartamento', 40000.00, 19, '2024-09-20', 'Busca un apartamento cerca del centro'),
+('María López', 'Calle 8, Urb. La Florida, Maracaibo', '0416-8765432', 'Casa', 60000.00, 20, '2024-09-21', 'Quiere una casa con jardín para su familia'),
+('José Rodríguez', 'Calle 12, Urb. Las Mercedes, Barquisimeto', '0424-9876543', 'Apartamento', 45000.00, 36, '2024-09-22', 'Necesita un apartamento cerca de su trabajo'),
+('Ana Gómez', 'Av. Libertador, Edif. Central, Caracas', '0412-3456789', 'Casa', 70000.00, 22, '2024-09-23', 'Busca una casa grande con garaje'),
+('Pedro Pérez', 'Calle Los Jardines, Urb. El Paraíso, Maracaibo', '0414-1234567', 'Apartamento', 50000.00, 39, '2024-09-24', 'Interesado en un apartamento con vista al lago');
+--9. Realizar listados de los posibles inquilinos registrados en cada oficina (toda la plantilla).
+SELECT *
+FROM CLIENTES
+
+
+--10. Buscar inmuebles para alquilar que satisfacen las necesidades de un posible inquilino (toda la plantilla).
+SELECT CodigoCliente, CodigoInmueble, DireccionCalle, DireccionNumero, DireccionCiudad, i.TipoInmueble, NumHabitaciones, Descripcion, PrecioAlquilerEuros, PrecioVenta, CodigoPropietario, i.CodigoEmpleado
+FROM INMUEBLES i, CLIENTES cl
+WHERE PrecioAlquilerEuros IS NOT NULL 
+AND cl.TipoInmueble = i.TipoInmueble 
+AND PrecioAlquilerEuros <= ImporteMax
+AND CodigoCliente = 11
+
+
+--11. Crear y mantener las fichas de las visitas realizadas por los posibles inquilinos (toda la plantilla).
+-- Insertar 5 registros en la tabla VISITAN
+INSERT INTO VISITAN (CodigoCliente, CodigoInmueble, FechaVisita, Comentarios)
+VALUES
+(11, 6, '2024-10-01', 'Le gustó el apartamento pero el precio es alto'),
+(11, 9, '2024-10-02', 'La casa necesita algunas reparaciones'),
+(12, 7, '2024-10-03', 'Le pareció excelente ubicación, pero muy pequeño'),
+(12, 6, '2024-10-04', 'Interesada, pero requiere más habitaciones'),
+(14, 7, '2024-10-05', 'Quedó satisfecho con la vista del apartamento');
+
+--12. Realizar listados con los comentarios hechos por los posibles inquilinos respecto a un inmueble concreto (toda la plantilla).
+SELECT Comentarios
+FROM VISITAN
+WHERE CodigoInmueble = 7
+
+
+--13. Crear y mantener las fichas con los datos de los anuncios insertados en los periódicos (toda la plantilla).
+-- Insertar 2 periódicos en la tabla PERIODICOS
+INSERT INTO PERIODICOS (NombrePeriodico, Direccion, NumTelefono, NombrePersonaContacto, NumFax)
+VALUES
+('El Nacional', 'Av. Urdaneta, Torre El Chorro, Caracas', '0212-5555555', 'Carlos García', '0212-5555556'),
+('El Universal', 'Calle Vargas, Edif. Centro, Maracaibo', '0261-7654321', 'María Rodríguez', '0261-7654322');
+
+-- Insertar 2 anuncios en cada periódico en la tabla ANUNCIAN
+INSERT INTO ANUNCIAN (NombrePeriodico, CodigoInmueble, FechaPublicacion, Comentarios)
+VALUES
+('El Nacional', 6, '2024-10-01', 'Apartamento céntrico en venta.'),
+('El Nacional', 7, '2024-10-02', 'Casa con jardín, ideal para familia.'),
+('El Universal', 8, '2024-10-03', 'Apartamento en excelente zona residencial.'),
+('El Universal', 9, '2024-10-04', 'Casa con piscina y amplias áreas verdes.');
+
+--14. Realizar listados de todos los anuncios que se han hecho sobre un determinado inmueble (supervisor).
+SELECT *
+FROM ANUNCIAN
+WHERE CodigoInmueble = 7
+
+v15. Realizar listados de todos los anuncios realizados en un determinado periódico (supervisor).
+SELECT *
+FROM ANUNCIAN
+WHERE NombrePeriodico = 'El Nacional'
+
+--16. Crear y mantener las fichas que contienen los datos sobre cada contrato de alquiler (director y supervisor).
+-- Insertar un contrato de alquiler de un inmueble
+INSERT INTO CONTRATOS (MetodoPago, ImporteDeposito, TipoContrato, CodigoCliente, CodigoEmpleado)
+VALUES 
+	('Transferencia Bancaria', 1200.00, 'Alquiler', 11, 19),
+	('Tarjeta de Crédito', 2000.00, 'Alquiler', 12, 19); 
+
+-- Insertar en la tabla ALQUILERES el alquiler relacionado al contrato anterior
+INSERT INTO ALQUILERES (CodigoContrato, EstadoDeposito, ImporteMensual, FechaInicio, FechaFinalizacion, DuracionMeses)
+VALUES 
+	(1, TRUE, 600.00, '2024-09-01', '2025-03-01', 6),
+	(2, TRUE, 900.00, '2024-10-01', '2025-04-01', 6);
+	
+-- Asociar el inmueble al contrato de alquiler
+INSERT INTO CONTIENEN (NumeroContrato, CodigoInmueble)
+VALUES 
+	(1, 6), 
+	(2, 7), 
+    (2, 8);  
+--17. Realizar listados de los contratos de alquiler de un determinado inmueble (director y supervisor).
+SELECT DISTINCT 
+    contra.NumeroContrato,
+    conti.CodigoInmueble,
+    al.EstadoDeposito,
+    al.ImporteMensual,
+    al.FechaInicio,
+    al.FechaFinalizacion,
+    al.DuracionMeses,
+    contra.MetodoPago,
+    contra.ImporteDeposito,
+    contra.TipoContrato,
+    contra.CodigoCliente,
+    contra.CodigoEmpleado
+FROM 
+    CONTRATOS contra
+JOIN 
+    CONTIENEN conti ON contra.NumeroContrato = conti.NumeroContrato
+JOIN 
+    ALQUILERES al ON al.CodigoContrato = contra.NumeroContrato
+WHERE 
+    contra.TipoContrato = 'Alquiler' 
+    AND conti.CodigoInmueble = 6;
+
+--18. Crear y mantener las fichas con los datos de cada inspección realizada a los inmuebles en alquiler (toda la plantilla).
+-- Inserción de tres inspecciones
+INSERT INTO INSPECCIONAN (CodigoEmpleado, CodigoInmueble, FechaInspeccion, Comentarios) VALUES
+(19, 7, '2024-10-01', 'Inspección inicial de la propiedad. Todo en orden.'),
+(36, 8, '2024-10-02', 'Inspección realizada. Se recomienda limpieza.'),
+(20, 7, '2024-10-03', 'Inspección finalizada. Requiere reparaciones menores.');
+
+--19. Realizar listados de todas las inspecciones realizadas a un determinado inmueble (supervisor).
+SELECT *
+FROM INSPECCIONAN 
+WHERE CodigoInmueble = 7
+
+
+
+
