@@ -302,48 +302,52 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trigger_validar_fecha_contrato_alquiler BEFORE
 INSERT ON CONTIENEN FOR EACH ROW EXECUTE FUNCTION validar_fecha_contrato_alquiler();
 --Después de la venta de un inmueble, el cliente pasa a ser el propietario. 
+-- Crear la función para insertar un nuevo propietario y actualizar el inmueble
 CREATE OR REPLACE FUNCTION actualizar_propietario_despues_de_venta() RETURNS TRIGGER AS $$
-DECLARE codigo_cliente INTEGER;
-nuevo_nombre VARCHAR(50);
-nueva_direccion VARCHAR(70);
-nuevo_num_telefono VARCHAR(15);
-nuevo_tipo_propietario VARCHAR(20) := 'Particular';
--- Cambia a 'Particular'
-nuevo_tipo_empresa VARCHAR(50) := NULL;
--- Asegúrate de que sea NULL
-nuevo_nombre_persona_contacto VARCHAR(50);
-BEGIN -- Obtener el Código del Cliente de la factura asociada
-SELECT CodigoCliente INTO codigo_cliente
-FROM FACTURAS
-WHERE NumeroFactura = NEW.NumeroFactura;
--- Obtener los atributos del nuevo propietario desde la tabla CLIENTES
-SELECT Nombre,
-    Direccion,
-    NumTelefono INTO nuevo_nombre,
-    nueva_direccion,
-    nuevo_num_telefono
-FROM CLIENTES
-WHERE CodigoCliente = codigo_cliente;
--- Actualizar el propietario del inmueble que está incluido en la factura
-UPDATE PROPIETARIOS
-SET Nombre = nuevo_nombre,
-    Direccion = nueva_direccion,
-    NumTelefono = nuevo_num_telefono,
-    TipoPropietario = nuevo_tipo_propietario,
-    TipoEmpresa = nuevo_tipo_empresa,
-    NombrePersonaContacto = nuevo_nombre_persona_contacto
-WHERE CodigoPropietario IN (
-        SELECT CodigoPropietario
-        FROM INMUEBLES
-        WHERE CodigoInmueble = NEW.CodigoInmueble -- Se usa el inmueble que está en la tabla INCLUYEN
-    );
-RETURN NEW;
+DECLARE
+    codigo_cliente INTEGER;
+    nuevo_codigo_propietario INTEGER;
+BEGIN
+    -- Obtener el CodigoCliente de la factura asociada
+    SELECT CodigoCliente INTO codigo_cliente
+    FROM FACTURAS
+    WHERE NumeroFactura = NEW.NumeroFactura;
+    
+    -- Insertar un nuevo propietario con los datos del cliente
+    INSERT INTO PROPIETARIOS (
+        Nombre,
+        Direccion,
+        NumTelefono,
+        TipoPropietario,
+        TipoEmpresa,
+        NombrePersonaContacto
+    )
+    SELECT
+        Nombre,
+        Direccion,
+        NumTelefono,
+        'Particular', -- TipoPropietario siempre será 'Particular'
+        NULL,         -- TipoEmpresa será NULL
+        NULL          -- NombrePersonaContacto será NULL
+    FROM CLIENTES
+    WHERE CodigoCliente = codigo_cliente
+    RETURNING CodigoPropietario INTO nuevo_codigo_propietario;
+    
+    -- Actualizar el inmueble con el nuevo CodigoPropietario
+    UPDATE INMUEBLES
+    SET CodigoPropietario = nuevo_codigo_propietario
+    WHERE CodigoInmueble = NEW.CodigoInmueble;
+
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Crear el trigger para ejecutar después de insertar en la tabla INCLUYEN
 CREATE TRIGGER trigger_actualizar_propietario
-AFTER
-INSERT ON INCLUYEN -- Se ejecuta después de insertar en INCLUYEN
-    FOR EACH ROW EXECUTE FUNCTION actualizar_propietario_despues_de_venta();
+AFTER INSERT ON INCLUYEN
+FOR EACH ROW
+EXECUTE FUNCTION actualizar_propietario_despues_de_venta();
+
 -- Cada miembro de la plantilla puede tener asignados hasta veinte inmuebles para alquilar.
 CREATE OR REPLACE FUNCTION validar_inmuebles_empleado() RETURNS TRIGGER AS $$ BEGIN IF (
         SELECT COUNT(*)
