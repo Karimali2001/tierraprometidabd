@@ -306,7 +306,7 @@ CREATE OR REPLACE FUNCTION actualizar_propietario_despues_de_venta() RETURNS TRI
 DECLARE codigo_cliente INTEGER;
 nuevo_nombre VARCHAR(50);
 nueva_direccion VARCHAR(70);
-nuevo_num_telefono VARCHAR(8);
+nuevo_num_telefono VARCHAR(15);
 nuevo_tipo_propietario VARCHAR(20) := 'Particular';
 -- Cambia a 'Particular'
 nuevo_tipo_empresa VARCHAR(50) := NULL;
