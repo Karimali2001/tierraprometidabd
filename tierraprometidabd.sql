@@ -372,6 +372,38 @@ END;
 $$ LANGUAGE plpgsql;
 CREATE TRIGGER trigger_validar_empleados_supervisor BEFORE
 INSERT ON EMPLEADOS FOR EACH ROW EXECUTE FUNCTION validar_empleados_por_supervisor();
+--Supervisor no puede tener supervisor
+CREATE OR REPLACE FUNCTION fn_add_supervisor() RETURNS TRIGGER AS $$
+BEGIN
+	IF new.cargo = 'Supervisor' THEN
+		IF new.codigosupervisor IS NOT NULL THEN
+			RAISE NOTICE 'A SUPERVISOR CANNOT HAVE A SUPERVISOR.';
+			RETURN old;
+		END IF;
+	END IF;
+	
+	RETURN new;
+END;
+$$
+LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER tr_add_supervisor BEFORE INSERT ON empleados
+FOR EACH ROW EXECUTE PROCEDURE fn_add_supervisor();
+--Director no puede tener supervisor
+CREATE OR REPLACE FUNCTION fn_add_director() RETURNS TRIGGER AS $$
+BEGIN
+	IF new.cargo = 'Director' THEN
+		IF new.codigosupervisor IS NOT NULL THEN
+			RAISE NOTICE 'A DIRECTOR CANNOT HAVE A SUPERVISOR.';
+			RETURN old;
+		END IF;
+	END IF;
+	
+	RETURN new;
+END;
+$$
+LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER tr_add_director BEFORE INSERT ON empleados
+FOR EACH ROW EXECUTE PROCEDURE fn_add_director();
 --Jerarquia exclusiva empleados
 CREATE OR REPLACE FUNCTION validar_insertar_administrador() RETURNS TRIGGER AS $$
 DECLARE tipo_empleado VARCHAR(50);
@@ -699,6 +731,39 @@ VALUES (
         30000.00,
         '2022-09-15',
         'Otro',
+        1,
+        2
+    );
+-- Probar trigger de supervisores no puede tener supervisor o para el caso de director
+INSERT INTO EMPLEADOS (
+        DNI,
+        Nombre,
+        Direccion,
+        NumTelefono,
+        FechaNacimiento,
+        ParienteNombre,
+        ParienteRelacion,
+        ParienteDireccion,
+        ParienteNumTelefono,
+        SalarioAnual,
+        FechaIngreso,
+        Cargo,
+        CodigoOficina,
+        CodigoSupervisor
+    )
+VALUES (
+        'V-12345679',
+        'Patricia Martínez',
+        'Calle 13, Edif. 25',
+        '0414-1234568',
+        '1994-06-15',
+        'Javier Martínez',
+        'Esposo',
+        'Calle 10, Casa 9',
+        '0414-5678902',
+        30000.00,
+        '2022-09-15',
+        'Director',
         1,
         2
     );
